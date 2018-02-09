@@ -1,7 +1,7 @@
 ### JDK-Concurrent 深入学习
 - 开始从源码层面研究Concurrent包,以及其他并发相关的包,对于途中遇到的不明白的东西,也会作相应了解.
 - 该项目的缘由是看CopyOnWriteArrayList源码时,对Unsafe类一无所知,才有了好好钻研一番的冲动.
-
+- AtomicLong在高并发下性能甚至还不如加锁,LongAdder比AtomicLong更适用于高并发下的累加 TODO 后续研究其原理
 #### 强引用、软引用、弱引用、幽灵引用、引用队列
 - 强引用:StrongReference
     - 例如Date date = new Date()；对象可以在程序中到处传递；
