@@ -1,5 +1,7 @@
 package com.zx.concorrent.loader;
 
+import lombok.Data;
+
 /**
  * author:ZhengXing
  * datetime:2018/2/9 0009 14:05
@@ -11,4 +13,6 @@ public class CustomClassLoader extends ClassLoader{
 	protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
 		return super.loadClass(name, resolve);
 	}
+
+
 }
