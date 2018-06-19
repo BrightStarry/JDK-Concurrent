@@ -7,11 +7,31 @@
     - 例如Date date = new Date()；对象可以在程序中到处传递；
     - 强引用限制了对象在内存中的存活时间；例如A对象中保存了B对象的强引用，那么如果
         A对象没有把B对象设为null的话，只有当A对象被回收后，B对象不再指向它了，才可能被回收.
+    ```
+        // java.lang.OutOfMemoryError: GC overhead limit exceeded
+        // 内存溢出，因为引用之一直存在，不会被GC
+        ArrayList<Object> list = new ArrayList<>();
+        for (;;){
+            HashMap<Object, Object> ma = new HashMap<>();
+            ma.put("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", new Double(100000000));
+            list.add(ma);
+        }
+    ```
 - 软引用:SoftReference
     - 当JVM内存不足时，可以回收软引用对象，如果还不足才抛出OOM(OutOfMemory)；
     - 该引用非常适合创建缓存；
     - 注意，因为该对象可能被回收，所以每次get时，需要判断是否存在
     - 在JDK 1.2之后，提供了SoftReference类来实现软引用。
+    ```
+        // java.lang.NullPointerException
+        // 最后抛出空指针，因为当jvm内存不足，该引用被GC,则get()方法获取到null
+        SoftReference<ArrayList<Object>> s = new SoftReference<>( new ArrayList<>());
+        for (;;){
+            HashMap<Object, Object> ma = new HashMap<>();
+            ma.put("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", new Double(100000000));
+            s.get().add(ma);
+        }
+    ```    
 - 弱引用:WeakReference
     - 引用一个对象，但是并不阻止该对象被回收
     - 在垃圾回收器运行的时候，如果一个对象的所有引用都是弱引用的话，该对象会被回收
@@ -19,6 +39,40 @@
     - 常用于集合类，例如HashMap中(有WeakHashMap类)；
     - 在JDK 1.2之后，提供了WeakReference类来实现弱引用。
     - (如下类加载器中的并发类加载器注册逻辑就使用了该引用,以在类加载器GC后,自动GC该类加载器的是否并发状态)  
+    ```
+        /**
+         * 弱引用
+         * java.lang.NullPointerException
+         * 当map不再有对list的强引用时，list就会被gc，就会报空指针
+         * 此处模拟，执行循环1000次后，将map=null，然后下次GC，list就会马上被回收
+         * 注意，如果不在后面再次调用map，jvm应当会在map指定完map.put("a", new ArrayList<>());后，就可能将其GC
+         */
+        // 构造一个list放入map -此处map维护了对list的强引用
+        Map<Object, List<Object>> map = new HashMap();
+        map.put("a", new ArrayList<>());
+        // 将该list放入弱引用对象中
+        WeakReference<List<Object>> s = new WeakReference<>(map.get("a"));
+        int i = 0;
+        for (; ; i++) {
+            // 将map设置为null，也就是去除了所有对list的强引用，只剩下一个对list的弱引用
+            if (i > 1000) {
+                  map = null;
+            }
+            HashMap<Object, Object> ma = new HashMap<>();
+            ma.put("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", new Double(100000000));
+            try {
+                s.get().add(ma);
+            } catch (Exception e) {
+                // 结束时输出此时的i
+                System.out.println(i);
+                // 如果不增加下面这句代码，再次使用到map。 map在执行完map.put("a", new ArrayList<>());后就会被回收
+                // 所以即使没有执行map = null;，很快也会报空指针。
+                System.out.println(map.get("a"));
+                System.out.println(e.getMessage());
+                break;
+            }
+        }
+    ```
 - 幽灵引用:PhantomReference
     - 任何时候调用get，返回的都是null，需要搭配引用队列使用
     - PhantomReference ref = new PhantomReference(new A(), queue); 这么写可以确保A对象完全被回收后才进入引用队列
@@ -35,6 +89,27 @@
     就需要把该键值对从哈希表中删除。有了引用队列（ReferenceQueue），就可以方便的获取到这些弱引用对象，  
     将它们从表中删除。在软引用和弱引用对象被添加到队列之前，其对实际对象的引用会被自动清空。  
     通过引用队列的poll/remove方法就可以分别以非阻塞和阻塞的方式获取队列中的引用对象。
+    ```
+        /**
+         * 幽灵引用&引用队列
+         */
+        // 引用队列
+        ReferenceQueue<List<Object>> q = new ReferenceQueue<>();
+        new Thread(()->{
+            try {
+                // 此处remove()方法是阻塞的，直到获取到一个被GC的对象，就会输出
+                System.out.println(q.remove());
+            }catch (Exception e){
+                e.printStackTrace();
+            }
+        }).start();
+        // 幽灵引用
+        PhantomReference<List<Object>> p = new PhantomReference<>(new ArrayList<>(),q);
+        // null
+        System.out.println(p.get());
+        // 主动执行gc，执行完毕后，队列将收到通知
+        System.gc();
+    ```
 
 #### 双亲委派模型
 - 对于JVM来说,只有两种类加载器
@@ -213,7 +288,18 @@
         因为此处是基础类库,为了追求极致性能(volatile也有一些性能开销),
         这里主要利用了AbstractQueuedSynchronizer中的releaseShared与tryAcquireSharedNanos存在happen-before关系.  
         也就是捎带同步（piggybacking on synchronization）,当releaseShared()方法未被调用时,调用tryAcquireSharedNanos方法会自动阻塞.
-    
+ 
+#### CPU多级缓存
+* CPU cache： 内存速度无法跟上CPU的执行速度。所以在CPU时钟周期内，CPU常需要等待内存。而且CPU cache就是为了解决这个问题。
+    * CPU cache的意义：
+        * 时间局部性： 如果某个数据被访问，那么在不久的将来它可能被再次访问。
+        * 空间局部性： 如果某个数据被访问，那么和它相邻的数据可能马上被访问。
+* CPU多级缓存-缓存一致性（MESI）： 用于保证多级缓存间共享的数据的一致
+    * 数据有四种状态，例如缓存被修改，和内存中的数据不一致等。然后可以通过 
+        local read/ local write/ remote read/ remote write几种操作修改数据，使其保持一致；
+* 乱序执行优化：处理器为提高运算速度执行时打乱代码原有顺序 
+
+        
     
 #### CopyOnWriteArrayList : 写时复制集合
 - 对该类源码做了大致阅读,几乎都是简单的数组操作.后面的一些关于迭代器返回的可能稍显复杂,但也无非是一些简单的操作.  
@@ -653,5 +739,127 @@
             同理storeFence()表示该方法之前的所有store操作在内存屏障之前完成。
             fullFence()表示该方法之前的所有load、store操作在内存屏障之前完成。
         ```
+
+#### AtomicInteger
+- 依靠UnSafe的CAS方法，进行线程安全的int操作
+- 主要方法源码
+```java
+public class Example{
+     // atomicInteger中维护的真正的int值
+        private volatile int value;
+        
+        // 在加载类时，保存该类的value属性的地址偏移量到该属性
+         private static final long valueOffset;
+        
+            static {
+                try {
+                    valueOffset = unsafe.objectFieldOffset
+                        (AtomicInteger.class.getDeclaredField("value"));
+                } catch (Exception ex) { throw new Error(ex); }
+            }
     
+        /**
+        * {@link java.util.concurrent.atomic.AtomicInteger#incrementAndGet()} }
+            递增，并获取结果
+        */
+          public final int incrementAndGet() {
+                  return unsafe.getAndAddInt(this, valueOffset, 1) + 1;
+          }
+          
+          /**
+          * 调用了 {@link sun.misc.Unsafe#getAndAddInt(java.lang.Object, long, int)} } 
+            获取并增加int值
+            @param var1 AtomicInteger对象本身
+            @param var2 AtomicInteger保存的value属性的地址偏移量
+            @param var4 要增加的值 
+          */
+          public final int getAndAddInt(Object var1, long var2, int var4) {
+              
+              int var5;
+              do {
+                  // 获取 AtomicInteger对象的value属性值
+                  var5 = this.getIntVolatile(var1, var2);
+                  // 使用 CAS方法，当 对象的某属性当前值和预期值相同，则修改当前值为自己想要的值
+                  // 此处一直进行该判断，当并发很少时，可以马上完成替换
+                  // 但如果并发过大，则一直会在该循环中
+              } while(!this.compareAndSwapInt(var1, var2, var5, var5 + var4));
+              // 此处返回的是 还未进行CAS时的值，所以在incrementAndGet() 处需要+1
+              return var5;
+          }
+}   
+```           
+
+#### LongAdder
+- 继承了Striped64类，该类内部维护了一个类似AtomicLong的简化的类Cell的数组
+- 该Cell数组属性初始为空，只维护另一个属性base（相当于单个Cell元素），当产生并发冲突（修改值时使用CAS方法失败），则放弃base，并将Cell数组扩充为2，  
+然后依次进行2的幂等次的扩充，直到小于等于最接近 CPU核数的2的幂等（四核时为16）
+>  static final int NCPU = Runtime.getRuntime().availableProcessors(); // 获取cpu核心数
+- 维护了一个自旋锁（通过UnSafe），用于操作base和Cell时的并发控制
+```java
+public class Example{
+        // 一个int属性，作为自旋锁（未加锁时，值为0，加锁后值为1）
+        transient volatile int cellsBusy;
     
+        // 对自旋锁进行cas操作，只有当cellsBusy==0（未加锁）时才会执行成功，也表示获取锁成功
+        final boolean casCellsBusy() {
+                return UNSAFE.compareAndSwapInt(this, CELLSBUSY, 0, 1);
+        }
+        
+        // 自旋锁例子
+        public void spinLockExample(){
+            // 如果获取锁失败，循环尝试（自旋）
+            for (;;){
+                // 类似双重检查模式， 尝试获取自旋锁
+                if(callsBusy ==0 && casCellsBusy()){
+                    try{
+                        //... 进行一些同步操作
+                    }finally{
+                        // 释放自旋锁
+                        callsBusy = 0;
+                    }
+                    // 获取，进行了一系列操作，退出自旋
+                    continue;
+                }
+            }
+        }
+        
+        /**
+        * 
+        * 一个简化的仅支持原始访问和CAS 的 AtomicLong
+        */
+        @sun.misc.Contended static final class Cell {
+                // 实际值
+                volatile long value;
+                // 构造函数，传入初始实际值
+                Cell(long x) { value = x; }
+                
+                // 对value属性进行cas操作
+                final boolean cas(long cmp, long val) {
+                    return UNSAFE.compareAndSwapLong(this, valueOffset, cmp, val);
+                }
+        
+                // Unsafe对象
+                private static final sun.misc.Unsafe UNSAFE;
+                // value属性的偏移量
+                private static final long valueOffset;
+                static {
+                    try {
+                        // 获取
+                        UNSAFE = sun.misc.Unsafe.getUnsafe();
+                        // 获取value属性的偏移量
+                        Class<?> ak = Cell.class;
+                        valueOffset = UNSAFE.objectFieldOffset
+                            (ak.getDeclaredField("value"));
+                    } catch (Exception e) {
+                        // 异常时，直接结束程序
+                        throw new Error(e);
+                    }
+                }
+            }
+}
+```
+
+#### 吐槽
+- 从LongAdder类看它父类Striped64，然后里面又去看ThreadLocalRandom，里面有存了Thread类的threadLocalRandomProbe属性的内存偏移，  
+又去研究这个属性到底干啥使的。这个属性上又有个注解@sun.misc.Contended("tlr")，本不想去细究了，又在找这个属性干啥使的时候看到
+了个关于Java的CPUCache详解。。。深似海深似海
