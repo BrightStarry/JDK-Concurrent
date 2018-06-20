@@ -248,7 +248,7 @@
         
         还有其他一些例如 线程中上一个动作及之前的所有写操作在该线程执行下一个动作时对该线程可见
     ```
-- 此外,FutureTask的源码中
+- 此外,FutureTask的源码中(1.8中已经变了)
     - 将结果写入FutureTask的代码如下
         ```
             void innerSet(V v) {
@@ -289,15 +289,7 @@
         这里主要利用了AbstractQueuedSynchronizer中的releaseShared与tryAcquireSharedNanos存在happen-before关系.  
         也就是捎带同步（piggybacking on synchronization）,当releaseShared()方法未被调用时,调用tryAcquireSharedNanos方法会自动阻塞.
  
-#### CPU多级缓存
-* CPU cache： 内存速度无法跟上CPU的执行速度。所以在CPU时钟周期内，CPU常需要等待内存。而且CPU cache就是为了解决这个问题。
-    * CPU cache的意义：
-        * 时间局部性： 如果某个数据被访问，那么在不久的将来它可能被再次访问。
-        * 空间局部性： 如果某个数据被访问，那么和它相邻的数据可能马上被访问。
-* CPU多级缓存-缓存一致性（MESI）： 用于保证多级缓存间共享的数据的一致
-    * 数据有四种状态，例如缓存被修改，和内存中的数据不一致等。然后可以通过 
-        local read/ local write/ remote read/ remote write几种操作修改数据，使其保持一致；
-* 乱序执行优化：处理器为提高运算速度执行时打乱代码原有顺序 
+
 
         
     
@@ -666,6 +658,8 @@
     }
 ```
 
+
+
 #### Unsafe & CAS(Compare And Switch) : 通过JNI提供硬件级别的原子操作
 - 在看CopyOnWriteArrayList/AtomicInteger等类源码时,都出现了该对象,都是JNI方法,不解其意,特地学习下.
 - 该类在sun.misc包下,不属于java标准,但在JDK/Netty/Hadoop/Kafka中都有对其的使用.
@@ -739,6 +733,34 @@
             同理storeFence()表示该方法之前的所有store操作在内存屏障之前完成。
             fullFence()表示该方法之前的所有load、store操作在内存屏障之前完成。
         ```
+- 测试CAS
+```
+    private static void casTest(Unsafe unsafe) throws NoSuchFieldException {
+        // 测试对象，设置属性值为0
+        User lockTest = new User().setSpinLock(0);
+        // 获取该属性在对象中的内存偏移
+        long spinLockOff = unsafe.objectFieldOffset(User.class.getDeclaredField("spinLock"));
+        // cas操作， 如果符合预期值，就替换该值
+        boolean b = unsafe.compareAndSwapInt(lockTest, spinLockOff, 0, 1);
+        // true
+        System.out.println(b);
+        // spinLock值为1
+        System.out.println(lockTest);
+    }      
+```  
+- 修改字段值
+```
+    private static void modifyField(Unsafe unsafe) throws NoSuchFieldException {
+        //定义对象
+        User user = new User().setName("xx");
+        //获取对象name字段的偏移量(应该是指，相对于user对象的内存地址的偏移量)
+        long nameOffset = unsafe.objectFieldOffset(User.class.getDeclaredField("name"));
+        //根据内存offset,修改user的name字段的值
+        unsafe.putObject(user, nameOffset, "郑牧之");
+        System.out.println(user);
+    }
+```
+        
 
 #### AtomicInteger
 - 依靠UnSafe的CAS方法，进行线程安全的int操作
@@ -746,118 +768,531 @@
 ```java
 public class Example{
      // atomicInteger中维护的真正的int值
-        private volatile int value;
+    private volatile int value;
         
-        // 在加载类时，保存该类的value属性的地址偏移量到该属性
-         private static final long valueOffset;
-        
-            static {
-                try {
-                    valueOffset = unsafe.objectFieldOffset
-                        (AtomicInteger.class.getDeclaredField("value"));
-                } catch (Exception ex) { throw new Error(ex); }
-            }
+    // 在加载类时，保存该类的value属性的地址偏移量到该属性
+    private static final long valueOffset;
+    static {
+        try {
+            valueOffset = unsafe.objectFieldOffset
+                (AtomicInteger.class.getDeclaredField("value"));
+        } catch (Exception ex) { throw new Error(ex); }
+    }
     
-        /**
-        * {@link java.util.concurrent.atomic.AtomicInteger#incrementAndGet()} }
-            递增，并获取结果
-        */
-          public final int incrementAndGet() {
-                  return unsafe.getAndAddInt(this, valueOffset, 1) + 1;
-          }
-          
-          /**
-          * 调用了 {@link sun.misc.Unsafe#getAndAddInt(java.lang.Object, long, int)} } 
-            获取并增加int值
-            @param var1 AtomicInteger对象本身
-            @param var2 AtomicInteger保存的value属性的地址偏移量
-            @param var4 要增加的值 
-          */
-          public final int getAndAddInt(Object var1, long var2, int var4) {
-              
-              int var5;
-              do {
-                  // 获取 AtomicInteger对象的value属性值
-                  var5 = this.getIntVolatile(var1, var2);
-                  // 使用 CAS方法，当 对象的某属性当前值和预期值相同，则修改当前值为自己想要的值
-                  // 此处一直进行该判断，当并发很少时，可以马上完成替换
-                  // 但如果并发过大，则一直会在该循环中
-              } while(!this.compareAndSwapInt(var1, var2, var5, var5 + var4));
-              // 此处返回的是 还未进行CAS时的值，所以在incrementAndGet() 处需要+1
-              return var5;
-          }
+    /**
+    * {@link java.util.concurrent.atomic.AtomicInteger#incrementAndGet()} }
+        递增，并获取结果
+    */
+    public final int incrementAndGet() {
+            return unsafe.getAndAddInt(this, valueOffset, 1) + 1;
+    }
+    
+    /**
+    * 调用了 {@link sun.misc.Unsafe#getAndAddInt(java.lang.Object, long, int)} } 
+      获取并增加int值
+      @param var1 AtomicInteger对象本身
+      @param var2 AtomicInteger保存的value属性的地址偏移量
+      @param var4 要增加的值 
+    */
+    public final int getAndAddInt(Object var1, long var2, int var4) {
+        
+        int var5;
+        do {
+            // 获取 AtomicInteger对象的value属性值
+            var5 = this.getIntVolatile(var1, var2);
+            // 使用 CAS方法，当 对象的某属性当前值和预期值相同，则修改当前值为自己想要的值
+            // 此处一直进行该判断，当并发很少时，可以马上完成替换
+            // 但如果并发过大，则一直会在该循环中
+        } while(!this.compareAndSwapInt(var1, var2, var5, var5 + var4));
+        // 此处返回的是 还未进行CAS时的值，所以在incrementAndGet() 处需要+1
+        return var5;
+    }
 }   
-```           
+```
+
+
 
 #### LongAdder
-- 继承了Striped64类，该类内部维护了一个类似AtomicLong的简化的类Cell的数组
+- 之前的AtomicInteger，当并发过大，会导致更新操作不停的进行CAS循环。该类可以理解为维护了若干个内部AtomicLong（cell），
+而最终值是所有cell相加值，那么并发修改时，会将压力分散到各个cell中。
+- 继承了Striped64类，主要代码由该类实现，该类内部维护了一个类似AtomicLong的简化的类Cell的数组
+- 对于分散并发到各元素的随机算法，该类用了Thread的probe属性（ThreadLocalRandom计算随机数也用到了该属性），将随机数 & cells.length -1 ，获取随机的下标
 - 该Cell数组属性初始为空，只维护另一个属性base（相当于单个Cell元素），当产生并发冲突（修改值时使用CAS方法失败），则放弃base，并将Cell数组扩充为2，  
 然后依次进行2的幂等次的扩充，直到小于等于最接近 CPU核数的2的幂等（四核时为16）
->  static final int NCPU = Runtime.getRuntime().availableProcessors(); // 获取cpu核心数
-- 维护了一个自旋锁（通过UnSafe），用于操作base和Cell时的并发控制
+- 维护了一个自旋锁（通过UnSafe的CAS），用于操作base和Cell时的并发控制
+- 如下为源码详解
 ```java
-public class Example{
-        // 一个int属性，作为自旋锁（未加锁时，值为0，加锁后值为1）
-        transient volatile int cellsBusy;
-    
-        // 对自旋锁进行cas操作，只有当cellsBusy==0（未加锁）时才会执行成功，也表示获取锁成功
-        final boolean casCellsBusy() {
-                return UNSAFE.compareAndSwapInt(this, CELLSBUSY, 0, 1);
+@SuppressWarnings("serial")
+abstract class Striped64 extends Number {
+    /**
+     * 一个简化的仅支持原始访问和CAS 的 AtomicLong
+     * 使用注解避免cache伪共享
+     */
+    @sun.misc.Contended
+    static final class Cell {
+        // 实际值
+        volatile long value;
+
+        // 构造函数，传入初始实际值
+        Cell(long x) {
+            value = x;
         }
-        
-        // 自旋锁例子
-        public void spinLockExample(){
-            // 如果获取锁失败，循环尝试（自旋）
-            for (;;){
-                // 类似双重检查模式， 尝试获取自旋锁
-                if(callsBusy ==0 && casCellsBusy()){
-                    try{
-                        //... 进行一些同步操作
-                    }finally{
-                        // 释放自旋锁
-                        callsBusy = 0;
+
+        // 对value属性进行cas操作
+        final boolean cas(long cmp, long val) {
+            return UNSAFE.compareAndSwapLong(this, valueOffset, cmp, val);
+        }
+
+        // Unsafe对象
+        private static final sun.misc.Unsafe UNSAFE;
+        // value属性的偏移量
+        private static final long valueOffset;
+
+        static {
+            try {
+                // 获取
+                UNSAFE = sun.misc.Unsafe.getUnsafe();
+                // 获取value属性的偏移量
+                Class<?> ak = Cell.class;
+                valueOffset = UNSAFE.objectFieldOffset
+                        (ak.getDeclaredField("value"));
+            } catch (Exception e) {
+                // 异常时，直接结束程序
+                throw new Error(e);
+            }
+        }
+    }
+
+    /**
+     * 获取cpu大小，用于限制 table大小
+     */
+    static final int NCPU = Runtime.getRuntime().availableProcessors();
+
+    /**
+     * table  非空时，大小是2的幂等
+     */
+    transient volatile Cell[] cells;
+
+    /**
+     * 初始值，主要在没有并发时使用，也可以用于table初始化时的回退， 通过CAS更新
+     */
+    transient volatile long base;
+
+    /**
+     * 一个int属性，作为自旋锁（未加锁时，值为0，加锁后值为1），通过CAS加锁
+     */
+    transient volatile int cellsBusy;
+
+    /**
+     * 包私有默认构造函数
+     */
+    Striped64() {
+    }
+
+    /**
+     * 对base字段进行cas操作
+     *
+     * @param cmp 预期值
+     * @param val 设定值
+     */
+    final boolean casBase(long cmp, long val) {
+        // 传入该对象本身， BASE属性保存的是base属性在当前对象中的内存偏移
+        return UNSAFE.compareAndSwapLong(this, BASE, cmp, val);
+    }
+
+    /**
+     * 对base字段进行cas操作，从0修改为1，进行加锁操作
+     */
+    final boolean casCellsBusy() {
+        return UNSAFE.compareAndSwapInt(this, CELLSBUSY, 0, 1);
+    }
+
+    /**
+     * 返回当前线程的probe值
+     */
+    static final int getProbe() {
+        // 获取当前线程，PROBE保存了Thread中probe属性的内存偏移
+        return UNSAFE.getInt(Thread.currentThread(), PROBE);
+    }
+
+    /**
+     * 使用xorshift随机数算法生成新的probe，并赋给当前线程
+     */
+    static final int advanceProbe(int probe) {
+        probe ^= probe << 13;   // xorshift 随机数算法
+        probe ^= probe >>> 17;
+        probe ^= probe << 5;
+        UNSAFE.putInt(Thread.currentThread(), PROBE, probe);
+        return probe;
+    }
+
+    /**
+     * long，累加
+     * 涉及了初始化cells，扩容，操作base等
+     *
+     * @param x              进行更新操作的相关值(如果fn为null，则为和原值累加的值)
+     * @param fn             更新函数，如果为null，则 将原值和x相加(避免了在LongAdder中需要额外的字段或函数）
+     * @param wasUncontended false：在调用该方法前cas已经失败了（对于当前probe & cells。length计算出的下标的元素来说）
+     */
+    final void longAccumulate(long x, LongBinaryOperator fn,
+                              boolean wasUncontended) {
+        int h; // 当前线程的probe
+        if ((h = getProbe()) == 0) { // 当线程未初始化threadLocalRandomSeed属性，则为0
+            ThreadLocalRandom.current(); // 强制线程进行初始化，会生成随机的probe
+            h = getProbe();//再次获取
+            wasUncontended = true;//此处重新生成了随机数，假设之前对索引为0的元素进行cas失败了，那么此后会更换元素进行cas，未必失败
+        }
+        // 如果上一次循环 cell非空，则为true
+        // 该标记唯一的作用就是，如果连续两次都更新失败了，就对cells进行扩容
+        boolean collide = false;
+        for (; ; ) {
+            Cell[] as; // 当前的 cell数组
+            Cell a; // 每个cell
+            int n; // cell数组长度
+            long v;// 原值
+            // 如果 cells已经被初始化
+            if ((as = cells) != null && (n = as.length) > 0) {
+                // 随机获取一个cell，如果为空（创建新的cell）
+                if ((a = as[(n - 1) & h]) == null) {
+                    if (cellsBusy == 0) {       // 判断自旋锁状态，尝试增加新的cell
+                        Cell r = new Cell(x);   // 乐观地创建（乐观锁）
+                        if (cellsBusy == 0 && casCellsBusy()) { // 此处再获取锁
+                            boolean created = false; // 是否创建成功标记
+                            try {               // 双重检查模式
+                                Cell[] rs;
+                                int m, j;
+                                // 再次判断 cells/cells.length存在，并且之前随机获取的cell仍为空
+                                //（此处如果没有并发修改，则随机出的结果和外层if一样，因为h（probe）没有改变）
+                                if ((rs = cells) != null &&
+                                        (m = rs.length) > 0 &&
+                                        rs[j = (m - 1) & h] == null) {
+                                    // 赋值，并标记成功
+                                    rs[j] = r;
+                                    created = true;
+                                }
+                            } finally {
+                                // 解锁
+                                cellsBusy = 0;
+                            }
+                            // 成功则退出循环
+                            if (created)
+                                break;
+                            // 否则跳出该次循环
+                            continue;           // 此时上个cell为非空，则collide仍旧为false
+                        }
                     }
-                    // 获取，进行了一系列操作，退出自旋
+                    // 本轮循环cell为空
+                    collide = false;
+                } else if (!wasUncontended)       // 此标记表示，在probe未更新前，CAS已经知道会失败
+                    wasUncontended = true;      // 重新hash后继续（该循环的下次操作会重新获取probe）
+
+                    // 如果该cell不为空，并且不一定失败，则进行cas操作，预期值使用fn函数计算，或者进行相加
+                else if (a.cas(v = a.value, ((fn == null) ? v + x :
+                        fn.applyAsLong(v, x))))
+                    // 成功则退出
+                    break;
+                    // 如果对cell的cas未成功，并且，cells长度超出cpu核心数了，或者cells比并发修改了，退出本次循环
+                else if (n >= NCPU || cells != as)
+                    collide = false;            // At max size or stale
+                else if (!collide) // 如果上次循环cell非空，则将其标记为true，当下次循环再进入，并且仍旧更新失败，则会对cells扩容
+                    collide = true;
+                    // 尝试获取自旋锁，对cells进行扩容
+                else if (cellsBusy == 0 && casCellsBusy()) {
+                    try {
+                        // 双重检查
+                        if (cells == as) {
+                            // cells，长度 * 2
+                            Cell[] rs = new Cell[n << 1];
+                            // 重新赋值
+                            for (int i = 0; i < n; ++i)
+                                rs[i] = as[i];
+                            cells = rs;
+                        }
+                    } finally {
+                        cellsBusy = 0;
+                    }
+                    collide = false;
                     continue;
                 }
-            }
-        }
-        
-        /**
-        * 
-        * 一个简化的仅支持原始访问和CAS 的 AtomicLong
-        */
-        @sun.misc.Contended static final class Cell {
-                // 实际值
-                volatile long value;
-                // 构造函数，传入初始实际值
-                Cell(long x) { value = x; }
-                
-                // 对value属性进行cas操作
-                final boolean cas(long cmp, long val) {
-                    return UNSAFE.compareAndSwapLong(this, valueOffset, cmp, val);
-                }
-        
-                // Unsafe对象
-                private static final sun.misc.Unsafe UNSAFE;
-                // value属性的偏移量
-                private static final long valueOffset;
-                static {
-                    try {
-                        // 获取
-                        UNSAFE = sun.misc.Unsafe.getUnsafe();
-                        // 获取value属性的偏移量
-                        Class<?> ak = Cell.class;
-                        valueOffset = UNSAFE.objectFieldOffset
-                            (ak.getDeclaredField("value"));
-                    } catch (Exception e) {
-                        // 异常时，直接结束程序
-                        throw new Error(e);
+                // 重新生成随机数probe
+                h = advanceProbe(h);
+
+                // 此处表示cell未被初始化
+                // 如果自旋锁未被占用，并且在上个if判断到此处cells未发生变化，并且获取到了自旋锁
+            } else if (cellsBusy == 0 && cells == as && casCellsBusy()) {
+                // 初始化标记，用于退出该for循环
+                // 之所以有该标记，是因为下面使用了双重检查模式，即使进入了该else if代码块，初始化未必成功
+                boolean init = false;
+                try {
+                    // 再次判断（因为在else if (cellsBusy == 0 && cells == as && casCellsBusy()) 处， 没有加锁），
+                    // 在判断完cells == as 后才去获取锁，如果那时cells被其他线程修改了，还是可能会失败.
+                    // 双重检查模式
+                    if (cells == as) {
+                        // 初始大小为2，2^1
+                        Cell[] rs = new Cell[2];
+                        // 随机生成第0个或第一个元素
+                        // 与操作，当随机数probe的第一位为1，则为1，否则为0
+                        // 创建一个cell，传入要累加的值
+                        rs[h & 1] = new Cell(x);
+                        // 赋值
+                        cells = rs;
+                        // 初始化标记
+                        init = true;
                     }
+                } finally {
+                    // 解锁
+                    cellsBusy = 0;
                 }
-            }
+                // 初始化成功后，退出
+                if (init)
+                    break;
+
+                // 对base进行cas操作，预期值使用fn函数计算，或者进行相加
+            } else if (casBase(v = base, ((fn == null) ? v + x :
+                    fn.applyAsLong(v, x))))
+                // 如果成功，退出
+                break;                          // 重新使用base
+        }
+    }
+    
+    
+    // Unsafe
+    private static final sun.misc.Unsafe UNSAFE;
+    // base的内存偏移
+    private static final long BASE;
+    // cellsBusy的内存偏移
+    private static final long CELLSBUSY;
+    // Thread的probe的内存偏移
+    private static final long PROBE;
+
+    static {
+        try {
+            // 获取 Unsafe和各个内存偏移
+            UNSAFE = sun.misc.Unsafe.getUnsafe();
+            Class<?> sk = Striped64.class;
+            BASE = UNSAFE.objectFieldOffset
+                    (sk.getDeclaredField("base"));
+            CELLSBUSY = UNSAFE.objectFieldOffset
+                    (sk.getDeclaredField("cellsBusy"));
+            Class<?> tk = Thread.class;
+            PROBE = UNSAFE.objectFieldOffset
+                    (tk.getDeclaredField("threadLocalRandomProbe"));
+        } catch (Exception e) {
+            throw new Error(e);
+        }
+    }
+
+    /**
+     * 该方法和 longAccumulate（）类似，不过long换成了double
+     */
+    final void doubleAccumulate(double x, DoubleBinaryOperator fn,
+                                boolean wasUncontended) {
+        int h;
+        if ((h = getProbe()) == 0) {
+            ThreadLocalRandom.current(); // force initialization
+            h = getProbe();
+            wasUncontended = true;
+        }
+        boolean collide = false;                // True if last slot nonempty
+        for (; ; ) {
+            Cell[] as;
+            Cell a;
+            int n;
+            long v;
+            if ((as = cells) != null && (n = as.length) > 0) {
+                if ((a = as[(n - 1) & h]) == null) {
+                    if (cellsBusy == 0) {       // Try to attach new Cell
+                        Cell r = new Cell(Double.doubleToRawLongBits(x));
+                        if (cellsBusy == 0 && casCellsBusy()) {
+                            boolean created = false;
+                            try {               // Recheck under lock
+                                Cell[] rs;
+                                int m, j;
+                                if ((rs = cells) != null &&
+                                        (m = rs.length) > 0 &&
+                                        rs[j = (m - 1) & h] == null) {
+                                    rs[j] = r;
+                                    created = true;
+                                }
+                            } finally {
+                                cellsBusy = 0;
+                            }
+                            if (created)
+                                break;
+                            continue;           // Slot is now non-empty
+                        }
+                    }
+                    collide = false;
+                } else if (!wasUncontended)       // CAS already known to fail
+                    wasUncontended = true;      // Continue after rehash
+                else if (a.cas(v = a.value,
+                        ((fn == null) ?
+                                Double.doubleToRawLongBits
+                                        (Double.longBitsToDouble(v) + x) :
+                                Double.doubleToRawLongBits
+                                        (fn.applyAsDouble
+                                                (Double.longBitsToDouble(v), x)))))
+                    break;
+                else if (n >= NCPU || cells != as)
+                    collide = false;            // At max size or stale
+                else if (!collide)
+                    collide = true;
+                else if (cellsBusy == 0 && casCellsBusy()) {
+                    try {
+                        if (cells == as) {      // Expand table unless stale
+                            Cell[] rs = new Cell[n << 1];
+                            for (int i = 0; i < n; ++i)
+                                rs[i] = as[i];
+                            cells = rs;
+                        }
+                    } finally {
+                        cellsBusy = 0;
+                    }
+                    collide = false;
+                    continue;                   // Retry with expanded table
+                }
+                h = advanceProbe(h);
+            } else if (cellsBusy == 0 && cells == as && casCellsBusy()) {
+                boolean init = false;
+                try {                           // Initialize table
+                    if (cells == as) {
+                        Cell[] rs = new Cell[2];
+                        rs[h & 1] = new Cell(Double.doubleToRawLongBits(x));
+                        cells = rs;
+                        init = true;
+                    }
+                } finally {
+                    cellsBusy = 0;
+                }
+                if (init)
+                    break;
+            } else if (casBase(v = base,
+                    ((fn == null) ?
+                            Double.doubleToRawLongBits
+                                    (Double.longBitsToDouble(v) + x) :
+                            Double.doubleToRawLongBits
+                                    (fn.applyAsDouble
+                                            (Double.longBitsToDouble(v), x)))))
+                break;                          // Fall back on using base
+        }
+    }
 }
 ```
+
+- LongAdder类主要源码
+```java
+public class LongAdder extends Striped64 implements Serializable {
+    /**
+     * 增加给定的值
+     *
+     * @param x 要增加的值
+     */
+    public void add(long x) {
+        Cell[] as; long b, v; int m; Cell a;
+        // 如果cells已经初始化，如果没有，就对base进行cas操作，如果还是失败了
+        if ((as = cells) != null || !casBase(b = base, b + x)) {
+            // 标明 对于当前随机出的下标（probe & cells.length -1 ）cas操作是否失败
+            boolean uncontended = true;
+            // as == null || m = as.length - 1) < 0，如果仍在使用base
+            // (a = as[getProbe() & m]) == null, 如果当前随机出的cell为空
+            // !(uncontended = a.cas(v = a.value, v + x)))，如果对当前随机出的cell直接进行cas操作失败
+            if (as == null || (m = as.length - 1) < 0 ||
+                (a = as[getProbe() & m]) == null ||
+                !(uncontended = a.cas(v = a.value, v + x)))
+                // 就进入Striped64中的该方法进行对应操作
+                longAccumulate(x, null, uncontended);
+        }
+    }
+
+    /**
+     * 返回当前的 总值，如果在求和时由并发操作，不会被计算在内
+     */
+    public long sum() {
+        Cell[] as = cells; Cell a;
+        // 默认直接使用base的值
+        long sum = base;
+        // 但如果cells不为空
+        if (as != null) {
+            // 则累加每个元素的值
+            for (int i = 0; i < as.length; ++i) {
+                if ((a = as[i]) != null)
+                    sum += a.value;
+            }
+        }
+        return sum;
+    }
+
+    /**
+     * 重置 总和为0，但该方法只有在没有并发更新时才会有效，所以调用时需要确保没有并发更新
+     */
+    public void reset() {
+        Cell[] as = cells; Cell a;
+        // 重置base为0
+        base = 0L;
+        // 如果cells不为空
+        if (as != null) {
+            // 重置每个元素为0
+            for (int i = 0; i < as.length; ++i) {
+                if ((a = as[i]) != null)
+                    a.value = 0L;
+            }
+        }
+    }
+
+    /**
+     * 求和，然后重置，同样不保证并发操作下的结果
+     */
+    public long sumThenReset() {
+        Cell[] as = cells; Cell a;
+        long sum = base;
+        base = 0L;
+        if (as != null) {
+            for (int i = 0; i < as.length; ++i) {
+                if ((a = as[i]) != null) {
+                    sum += a.value;
+                    a.value = 0L;
+                }
+            }
+        }
+        return sum;
+    }
+}    
+```
+
+#### CPU多级缓存
+* CPU cache： 内存速度无法跟上CPU的执行速度。所以在CPU时钟周期内，CPU常需要等待内存。而且CPU cache就是为了解决这个问题。
+    * CPU cache的意义：
+        * 时间局部性： 如果某个数据被访问，那么在不久的将来它可能被再次访问。
+        * 空间局部性： 如果某个数据被访问，那么和它相邻的数据可能马上被访问。
+* CPU多级缓存-缓存一致性（MESI）： 用于保证多级缓存间共享的数据的一致
+    * 数据有四种状态，例如缓存被修改，和内存中的数据不一致等。然后可以通过 
+        local read/ local write/ remote read/ remote write几种操作修改数据，使其保持一致；
+* 乱序执行优化：处理器为提高运算速度执行时打乱代码原有顺序            
+* MESI图解
+![MESI图解](img/MESI-detail.png)
+![MESI图解](img/MESI.gif)
+* 参考[CPU Cache 详解，提升Java运行效率](https://blog.csdn.net/wmq880204/article/details/53131275)
+* 简单可以概括为，在cpu cache的单个cache line（一个cache会被分为若干cache line（是cache中的最小存储单元,通常为64字节））中，
+当多线程修改相互独立的变量，但这些变量被缓存在同一个cache line中时，cache就会进行MESI的各种调度，以保证缓存数据的一致性，从而影响性能。
+这被称作伪共享.
+* 在JDK6之前，通常通过在两组变量中增加一个长整型变量来分隔每一组属性，
+每一组属性占的字节数加上前后填充属性所占的字节数，不小于一个cache line的字节数就可以避免伪共享
+```
+public class VolatileLong {  
+        volatile long p0, p1, p2, p3, p4, p5, p6;  
+        volatile long v = 0L;  
+        volatile long q0, q1, q2, q3, q4, q5, q6;  
+}  
+```
+* 在JDK8中，新增@sun.misc.Contended，将各个变量在Cache Line中分隔开来，注意，jvm需要添加参数-XX:-RestrictContended才能开启此功能 
+    - 在类上增加改注解，表示整个类的每个变量都会在单独的cache line中
+    - 在A属性上增加该注解：@sun.misc.Contended("group1")，在B属性上增加：@sun.misc.Contended("group2")，则A和B会存在于不同的cache line中
+    - 在如下地方，都用到了该注解：
+        - ConcurrentHashMap：内部简化的LongAdder类CounterCell中
+        - Thread:三个产生随机数的相关属性
+        - 此外还有著名的Disruptor无锁队列（HBase、Hive、Storm等框架都有在使用Disruptor），自己的
+        [多线程学习项目](https://github.com/BrightStarry/Multithreading/tree/master/src/main/java/com/zx/disruptor)曾简单涉及
+        - 当然，还有LongAdder的父类Striped64中（就是因为整个类才看整个注解的）
 
 #### 吐槽
 - 从LongAdder类看它父类Striped64，然后里面又去看ThreadLocalRandom，里面有存了Thread类的threadLocalRandomProbe属性的内存偏移，  
