@@ -1298,3 +1298,8 @@ public class VolatileLong {
 - 从LongAdder类看它父类Striped64，然后里面又去看ThreadLocalRandom，里面有存了Thread类的threadLocalRandomProbe属性的内存偏移，  
 又去研究这个属性到底干啥使的。这个属性上又有个注解@sun.misc.Contended("tlr")，本不想去细究了，又在找这个属性干啥使的时候看到
 了个关于Java的CPUCache详解。。。深似海深似海
+
+
+#### 记录
+- synchronized内部实现就是一个小小的自旋锁，自旋几十纳秒后如果无法开锁，才会让操作系统挂起线程。
+- synchronized不发生频繁冲突时，很快。绝大多数情况下要比自己费老大劲用CAS去写lock-free算法还要快。
