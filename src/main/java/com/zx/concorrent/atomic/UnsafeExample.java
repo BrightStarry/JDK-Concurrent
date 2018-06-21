@@ -1,4 +1,4 @@
-package com.zx.concorrent;
+package com.zx.concorrent.atomic;
 
 import lombok.Data;
 import lombok.SneakyThrows;

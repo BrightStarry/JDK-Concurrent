@@ -33,7 +33,7 @@
  * http://creativecommons.org/publicdomain/zero/1.0/
  */
 
-package com.zx.concorrent.atomic;
+package com.zx.concorrent.source;
 
 import java.io.Serializable;
 import java.util.concurrent.atomic.AtomicLong;
